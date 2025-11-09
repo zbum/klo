@@ -19,7 +19,7 @@ import (
 
 	"k8s.io/client-go/util/jsonpath"
 
-	t "github.com/thediveo/klo/testutil"
+	t "github.com/zbum/klo/testutil"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

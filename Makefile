@@ -11,7 +11,7 @@ coverage: ## gathers coverage and updates README badge
 	@scripts/cov.sh
 
 pkgsite: ## serves Go documentation on port 6060
-	@echo "navigate to: http://localhost:6060/github.com/thediveo/klo"
+	@echo "navigate to: http://localhost:6060/github.com/zbum/klo"
 	@scripts/pkgsite.sh
 
 report: ## run goreportcard on this module

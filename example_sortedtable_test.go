@@ -17,8 +17,8 @@ package klo_test
 import (
 	"os"
 
-	"github.com/thediveo/klo"
-	"github.com/thediveo/klo/testutil"
+	"github.com/zbum/klo"
+	"github.com/zbum/klo/testutil"
 )
 
 func Example_sortedtable() {

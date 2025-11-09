@@ -24,6 +24,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/mattn/go-runewidth"
 	"k8s.io/client-go/util/jsonpath"
 )
 
@@ -35,6 +36,10 @@ type CustomColumnsPrinter struct {
 	HideHeaders bool
 	// Padding between columns
 	Padding int
+	// MinWidth is the minimum width for each column (matches tabwriter minwidth)
+	MinWidth int
+	// TabWidth is the tab width for alignment (matches tabwriter tabwidth)
+	TabWidth int
 }
 
 // Column stores the header text and the JSONPath for fetching column values.
@@ -60,7 +65,9 @@ func NewCustomColumnsPrinterFromSpec(spec string) (ValuePrinter, error) {
 	// the column header text as well as the JSONPath expression for each
 	// column.
 	ccp := &CustomColumnsPrinter{
-		Padding: 1,
+		Padding:  1,
+		MinWidth: 5,
+		TabWidth: 8,
 	}
 	templcols := strings.Split(spec, ",")
 	columns := make([]*Column, len(templcols))
@@ -105,7 +112,9 @@ func NewCustomColumnsPrinterFromTemplate(tr io.Reader) (ValuePrinter, error) {
 		return nil, fmt.Errorf("no columns specified; %s", expectedformat)
 	}
 	ccp := &CustomColumnsPrinter{
-		Padding: 1,
+		Padding:  1,
+		MinWidth: 5,
+		TabWidth: 8,
 	}
 	columns := make([]*Column, len(columnheaders))
 	for idx := range columnheaders {
@@ -128,16 +137,93 @@ func NewCustomColumnsPrinterFromTemplate(tr io.Reader) (ValuePrinter, error) {
 // is already a tabwriter, then it is the caller's responsibility to flush the
 // tabwriter when it's the right point to do so.
 func (p *CustomColumnsPrinter) Fprint(w io.Writer, v interface{}) error {
-	// If the writer given isn't a tabwriter, let's wrap it into one! And only
-	// then ensure that the tabbed table gets flushed, so the column widths
-	// get calculated and the columns properly aligned. If the caller gave us
-	// a tabwriter, then it is her/his responsibility to flush the tabwriter
-	// table when necessary.
-	if _, ok := w.(*tabwriter.Writer); !ok {
-		tw := tabwriter.NewWriter(w, 5, 8, p.Padding, ' ', 0)
-		defer tw.Flush()
-		w = tw
+	// Check if writer is a tabwriter - if so, use the legacy tab-based formatting
+	if _, ok := w.(*tabwriter.Writer); ok {
+		return p.fprintLegacy(w, v)
 	}
+
+	// Collect all rows
+	var rows [][]string
+
+	// Add headers if not hidden
+	if !p.HideHeaders {
+		headers := make([]string, len(p.Columns))
+		for idx, column := range p.Columns {
+			headers[idx] = column.Header
+		}
+		rows = append(rows, headers)
+	}
+
+	// Collect data rows
+	if v != nil {
+		if reflect.TypeOf(v).Kind() == reflect.Slice {
+			sl := reflect.ValueOf(v)
+			for idx := 0; idx < sl.Len(); idx++ {
+				rowval := sl.Index(idx).Interface()
+				if rv, ok := rowval.(reflect.Value); ok {
+					rowval = rv.Interface()
+				}
+				rowData, err := p.getRowData(rowval)
+				if err != nil {
+					return err
+				}
+				rows = append(rows, rowData)
+			}
+		} else {
+			if rv, ok := v.(reflect.Value); ok {
+				v = rv.Interface()
+			}
+			rowData, err := p.getRowData(v)
+			if err != nil {
+				return err
+			}
+			rows = append(rows, rowData)
+		}
+	}
+
+	// Calculate column widths using runewidth
+	colWidths := make([]int, len(p.Columns))
+	for _, row := range rows {
+		for colIdx, cell := range row {
+			width := runewidth.StringWidth(cell)
+			if width > colWidths[colIdx] {
+				colWidths[colIdx] = width
+			}
+		}
+	}
+
+	// Determine minimum width (default to 5 like tabwriter)
+	minWidth := p.MinWidth
+	if minWidth == 0 {
+		minWidth = 5
+	}
+
+	// Print formatted rows
+	for _, row := range rows {
+		for colIdx, cell := range row {
+			fmt.Fprint(w, cell)
+			cellWidth := runewidth.StringWidth(cell)
+
+			if colIdx < len(row)-1 { // Not the last column
+				// Calculate total width for this column (content + padding)
+				totalWidth := colWidths[colIdx] + p.Padding
+				// Apply minwidth if the total width is less than minwidth
+				if totalWidth < minWidth {
+					totalWidth = minWidth
+				}
+				// Output spaces to reach the total width
+				spaces := totalWidth - cellWidth
+				fmt.Fprint(w, strings.Repeat(" ", spaces))
+			}
+		}
+		fmt.Fprintln(w)
+	}
+
+	return nil
+}
+
+// fprintLegacy handles printing when writer is a tabwriter (for backward compatibility)
+func (p *CustomColumnsPrinter) fprintLegacy(w io.Writer, v interface{}) error {
 	// Print column headers ... but only if not hidden...
 	if !p.HideHeaders {
 		headers := make([]string, len(p.Columns))
@@ -151,8 +237,6 @@ func (p *CustomColumnsPrinter) Fprint(w io.Writer, v interface{}) error {
 		if reflect.TypeOf(v).Kind() == reflect.Slice {
 			sl := reflect.ValueOf(v)
 			for idx := 0; idx < sl.Len(); idx++ {
-				// Work on a single row and now find the results of all columns
-				// for the current object...
 				rowval := sl.Index(idx).Interface()
 				if rv, ok := rowval.(reflect.Value); ok {
 					rowval = rv.Interface()
@@ -169,6 +253,23 @@ func (p *CustomColumnsPrinter) Fprint(w io.Writer, v interface{}) error {
 		}
 	}
 	return nil
+}
+
+// getRowData extracts row data without printing (used by new runewidth-based formatting)
+func (p *CustomColumnsPrinter) getRowData(rowval interface{}) ([]string, error) {
+	rowvals := make([]string, len(p.Columns))
+	for cidx, col := range p.Columns {
+		res, err := col.Template.FindResults(rowval)
+		if err != nil {
+			return nil, err
+		}
+		if len(res) == 0 || len(res[0]) == 0 {
+			rowvals[cidx] = "<none>"
+		} else {
+			rowvals[cidx] = stringFromJSONExprResult(res, ", ")
+		}
+	}
+	return rowvals, nil
 }
 
 // printrow prints a single row, that is, a single row object.
