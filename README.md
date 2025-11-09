@@ -38,6 +38,41 @@ In addition, sorting is supported by wrapping an output-format printer into a
 sorting printer. This allows to sort the rows in a custom-columns output based
 on row values taken from one or even multiple columns.
 
+## Multi-byte Character Support
+
+`klo` properly supports Korean, Japanese, Chinese, and other multi-byte characters (CJK) in table output. The package uses [go-runewidth](https://github.com/mattn/go-runewidth) to accurately calculate the display width of characters, ensuring that table columns are properly aligned even when containing text in multiple languages.
+
+### Example with Korean
+
+```go
+type Person struct {
+    Name   string
+    Age    int
+    City   string
+}
+
+people := []Person{
+    {Name: "홍길동", Age: 25, City: "서울"},
+    {Name: "Alice", Age: 30, City: "New York"},
+    {Name: "田中太郎", Age: 28, City: "東京"},
+}
+
+prn, _ := klo.PrinterFromFlag("",
+    &klo.Specs{DefaultColumnSpec: "이름:{.Name},나이:{.Age},도시:{.City}"})
+prn.Fprint(os.Stdout, people)
+```
+
+This will output a properly aligned table:
+
+```text
+이름      나이  도시
+홍길동    25    서울
+Alice     30    New York
+田中太郎  28    東京
+```
+
+The columns remain perfectly aligned regardless of whether the text contains single-byte ASCII characters or double-width CJK characters.
+
 ## Basic Usage
 
 The following code example prints a table with multiple columns, and the rows
